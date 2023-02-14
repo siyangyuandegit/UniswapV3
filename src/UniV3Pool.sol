@@ -3,6 +3,7 @@ pragma solidity ^0.8.13;
 import "./lib/position.sol";
 import "./lib/tick.sol";
 import "./interfaces/IERC20Min.sol";
+import "../lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import "./interfaces/callback/IUniswapV3CallBack.sol";
 
 contract UniV3Pool {
@@ -16,7 +17,18 @@ contract UniV3Pool {
     address public immutable token0;
     address public immutable token1;
 
+    event Mint(
+        address sender,
+        address indexed owner,
+        int24 indexed tickLower,
+        int24 indexed tickUpper,
+        uint128 amount,
+        uint256 amount0,
+        uint256 amount1
+    );
+
     error InvalidTickRange();
+    error InsufficientInputAmount();
 
     struct Slot0 {
         uint160 sqrtPriceX96;
@@ -70,15 +82,25 @@ contract UniV3Pool {
         if (amount0 > 0) balance0Before = balance0();
         if (amount1 > 0) balance1Before = balance1();
 
-        IUniswapV3MintCallback(msg.sender).uniswapV3MintCallback(amount0, amount1);
-        if (amount0 > 0 && balance0Before + amount0 > balance0());
+        IUniswapV3MintCallback(msg.sender).uniswapV3MintCallback(
+            amount0,
+            amount1
+        );
+        if (amount0 > 0 && balance0Before + amount0 > balance0())
+            revert InsufficientInputAmount();
+        if (amount1 > 0 && balance1Before + amount1 > balance1())
+            revert InsufficientInputAmount();
+
+        emit Mint(msg.sender, owner, tickLower, tickUpper, amount, amount0, amount1);
     }
 
-    function balance0() internal returns (uint256 balance) {
-    balance = IERC20(token0).balanceOf(address(this));
-}
+    function balance0() internal view returns (uint256 balance) {
+        balance = IERC20(token0).balanceOf(address(this));
+    }
 
-function balance1() internal returns (uint256 balance) {
-    balance = IERC20(token1).balanceOf(address(this));
-}
+    function balance1() internal view returns (uint256 balance) {
+        balance = IERC20(token1).balanceOf(address(this));
+    }
+
+
 }
