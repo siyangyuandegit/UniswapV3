@@ -6,11 +6,12 @@ library Position {
         uint128 liquidity;
     }
 
-    function _update(Info storage self, uint128 _liquidityDelta) internal {
+    function _update(Info storage self, uint128 _liquidityDelta) internal returns(uint128) {
         uint128 liquidityBefore = self.liquidity;
         uint128 liquidityAfter = liquidityBefore + _liquidityDelta;
 
         self.liquidity = liquidityAfter;
+        return self.liquidity;
     }
 
     function get(

@@ -1,24 +1,23 @@
-import logo from './logo.svg';
 import './App.css';
+import { useState } from 'react';
+import SwapForm from './components/SwapForm.js';
+import MetaMask from './components/MetaMask.js';
+import EventsFeed from './components/EventsFeed.js';
+import { MetaMaskProvider } from './contexts/MetaMask';
 
-function App() {
+const App = () => {
+  const [pairs, setPairs] = useState([]);
+
   return (
-    <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.js</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
-    </div>
+    <MetaMaskProvider>
+      <div className="App flex flex-col justify-between items-center w-full h-full">
+        <MetaMask />
+        <SwapForm setPairs={setPairs} />
+        <footer>
+          <EventsFeed pairs={pairs} />
+        </footer>
+      </div>
+    </MetaMaskProvider>
   );
 }
 
