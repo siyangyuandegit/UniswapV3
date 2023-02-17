@@ -20,9 +20,9 @@ contract UniV3Manager {
         );
     }
 
-    function swap(address _poolAddress, bytes calldata data) public {
-        UniV3Pool(_poolAddress).swap(msg.sender, data);
-    }
+    // function swap(address _poolAddress, bytes calldata data) public {
+    //     UniV3Pool(_poolAddress).swap(msg.sender,  data);
+    // }
 
     function uniV3MintCallback(
         uint256 amount0,

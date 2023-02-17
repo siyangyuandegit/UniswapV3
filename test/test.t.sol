@@ -17,6 +17,8 @@ contract a is Test{
         // uint8 bitPos = 3;
         int16 wordPos = 0;
         uint256 word = 10;
+
+        
         tickBitmap[wordPos] = word;
         (int24 next,) = tickBitmap.nextInitializedTickWithinOneWord(tick, 1, true);
         // console2.log(tickBitmap[3]);

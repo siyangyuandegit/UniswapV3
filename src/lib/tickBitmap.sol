@@ -6,7 +6,7 @@ import "forge-std/Test.sol";
 
 library TickBitmap {
     function position(int24 tick)
-        private
+        internal
         pure
         returns (int16 wordPos, uint8 bitPos)
     {
@@ -34,15 +34,9 @@ library TickBitmap {
     ) internal view returns (int24 next, bool initialized) {
         int24 compressed = tick / tickSpacing;
         if (lte) {
-            console2.log("tick: ", tick);
             (int16 wordPos, uint8 bitPos) = position(compressed);
-            console2.log("wordPos:", wordPos);
-            console2.log("bitPos:", bitPos);
             uint256 mask = (1 << bitPos) - 1 + (1 << bitPos);
-            console2.log("mask: ", mask);
             uint256 masked = self[wordPos] & mask;
-            console2.log("masked: ", masked);
-
             initialized = masked != 0;
             next = initialized
                 ? (compressed -
@@ -50,7 +44,6 @@ library TickBitmap {
                         uint24(bitPos - BitMath.mostSignificantBit(masked))
                     )) * tickSpacing
                 : (compressed - int24(uint24(bitPos))) * tickSpacing;
-            console2.log("next: ", next);
         } else {
             (int16 wordPos, uint8 bitPos) = position(compressed + 1);
             uint256 mask = ~((1 << bitPos) - 1);
