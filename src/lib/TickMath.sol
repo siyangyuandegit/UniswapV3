@@ -31,6 +31,7 @@ library TickMath {
             : uint256(int256(tick));
         require(absTick <= uint256(int256(MAX_TICK)), "T");
 
+        // 以下数据分别是2 ** 0/1/2/3/.....
         uint256 ratio = absTick & 0x1 != 0
             ? 0xfffcb933bd6fad37aa2d162d1a594001
             : 0x100000000000000000000000000000000;

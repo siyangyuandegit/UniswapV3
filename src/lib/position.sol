@@ -4,6 +4,10 @@ pragma solidity ^0.8.13;
 library Position {
     struct Info {
         uint128 liquidity;
+        uint256 feeGrowthInside0LastX128;
+        uint256 feeGrowthInside1LastX128;
+        uint128 tokensOwed0;
+        uint128 tokensOwed1;
     }
 
     function _update(Info storage self, uint128 _liquidityDelta) internal returns(uint128) {

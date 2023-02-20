@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.13;
 import "./lib/position.sol";
+import "./lib/FixedPoint128.sol";
 import "./lib/tick.sol";
 import "./lib/tickBitmap.sol";
 import "./interfaces/IERC20Min.sol";
 import "../lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import "./interfaces/callback/IUniswapV3MintCallback.sol";
 import "./interfaces/callback/IUniswapV3SwapCallBack.sol";
+import "./interfaces/callback/IUniV3FlashCallBack.sol";
+import "./interfaces/IUniV3PoolDeployer.sol";
 import "./lib/Math.sol";
 import "./lib/TickMath.sol";
 import "./lib/SwapMath.sol";
 import "forge-std/Test.sol";
-
+import "./lib/LiquidityMath.sol";
 
 contract UniV3Pool is Test {
     using Tick for mapping(int24 => Tick.Info);
@@ -23,13 +26,30 @@ contract UniV3Pool is Test {
     int24 internal constant MIN_TICK = -887272;
     int24 internal constant MAX_TICK = -MIN_TICK;
 
+    address public immutable factory;
     address public immutable token0;
     address public immutable token1;
+    uint24 public immutable tickSpacing;
+    // uint24 public immutable fee;
+    mapping(int24 => Tick.Info) public ticks;
+    mapping(bytes32 => Position.Info) public positions;
+    uint128 public liquidity;
+    // 设置池子的手续费
+    uint24 public immutable fee;
+    uint256 public feeGrowthGlobal0X128;
+    uint256 public feeGrowthGlobal1X128;
 
-    struct CallbackData {
-        address token0;
-        address token1;
-        address payer;
+    struct Slot0 {
+        uint160 sqrtPriceX96;
+        int24 tick;
+    }
+    Slot0 public slot0;
+
+    struct ModifyPositionParams{
+        address owner;
+        int24 lowerTick;
+        int24 upperTick;
+        int128 liquidityDelta;
     }
 
     struct SwapState {
@@ -41,6 +61,10 @@ contract UniV3Pool is Test {
         uint160 sqrtPriceX96;
         // 交易结束后的tick
         int24 tick;
+        // 全局手续费
+        uint256 feeGrowthGlobalX128;
+        // 池子被激活的总流动性
+        uint128 liquidity;
     }
 
     struct StepState {
@@ -53,7 +77,17 @@ contract UniV3Pool is Test {
         // 当前流动性能提供的数量
         uint256 amountIn;
         uint256 amountOut;
+        uint256 feeAmount;
     }
+
+    event Burn(
+        address indexed owner,
+        int24 indexed tickLower,
+        int24 indexed tickUpper,
+        uint128 amount,
+        uint256 amount0,
+        uint256 amount1
+    );
 
     event Mint(
         address sender,
@@ -75,29 +109,32 @@ contract UniV3Pool is Test {
         int24 tick
     );
 
+    event Flash(address indexed recipient, uint256 amount0, uint256 amount1);
+
     error InvalidTickRange();
     error InsufficientInputAmount();
+    error NotEnoughLiquidity();
+    error InvalidPriceLimit();
+    error FlashLoanNotPaid();
 
-    struct Slot0 {
-        uint160 sqrtPriceX96;
-        int24 tick;
+    constructor() {
+        (factory, token0, token1, tickSpacing, fee) = IUniV3PoolDeployer(
+            msg.sender
+        ).parameters();
     }
 
-    Slot0 public slot0;
+    function initialize(uint160 sqrtPriceX96) public {
+        require(slot0.sqrtPriceX96 == 0, "already init");
+        int24 tick = TickMath.getTickAtSqrtRatio(sqrtPriceX96);
+        slot0 = Slot0({sqrtPriceX96: sqrtPriceX96, tick: tick});
+    }
 
-    uint128 public liquidity;
+    function _modifyPosition(ModifyPositionParams memory params) internal returns(Position.Info storage position, int256 amount0, int256 amount1){
+        Slot0 memory slot0_ = slot0;
+        uint256 feeGrowthGlobal0X128_ = feeGrowthGlobal0X128;
+        uint256 feeGrowthGlobal1X128_ = feeGrowthGlobal1X128;
 
-    mapping(int24 => Tick.Info) public ticks;
-    mapping(bytes32 => Position.Info) public positions;
 
-    constructor(
-        address _token0,
-        address _token1,
-        uint160 _sqrtPriceX96,
-        int24 _tick
-    ) {
-        (token0, token1) = (_token0, _token1);
-        slot0 = Slot0({sqrtPriceX96: _sqrtPriceX96, tick: _tick});
     }
 
     function mint(
@@ -114,14 +151,9 @@ contract UniV3Pool is Test {
         ) revert InvalidTickRange();
         require(amount > 0, "zero liquidity");
 
-        bool flippedLower = ticks._update(tickLower, amount);
-        bool flippedUpper = ticks._update(tickUpper, amount);
-        console2.log("ticklower: ", tickLower);
-        console2.log("tick lower init: ", flippedLower);
-        console2.log("tickupper: ", tickUpper);
-        console2.log("tick upper init: ", flippedUpper);
+        bool flippedLower = ticks._update(tickLower, int128(amount), false);
+        bool flippedUpper = ticks._update(tickUpper, int128(amount), true);
 
-        console2.log(ticks[85247].initialized);
         if (flippedLower) {
             tickBitmap.flickTick(tickLower, 1);
         }
@@ -134,20 +166,38 @@ contract UniV3Pool is Test {
             tickLower,
             tickUpper
         );
-        liquidity = position._update(amount);
-        amount0 = Math.calcAmount0Delta(
-            slot0.sqrtPriceX96,
-            TickMath.getSqrtRatioAtTick(tickUpper),
-            liquidity
-        );
-        amount1 = Math.calcAmount1Delta(
-            slot0.sqrtPriceX96,
-            TickMath.getSqrtRatioAtTick(tickLower),
-            liquidity
-        );
-
+        // 更新position
+        position._update(amount);
+        Slot0 memory slot0_ = slot0;
+        if (slot0_.tick < tickLower) {
+            amount0 = Math.calcAmount0Delta(
+                TickMath.getSqrtRatioAtTick(tickLower),
+                TickMath.getSqrtRatioAtTick(tickUpper),
+                int128(amount)
+            );
+        } else if (slot0_.tick < tickUpper) {
+            amount0 = Math.calcAmount0Delta(
+                slot0.sqrtPriceX96,
+                TickMath.getSqrtRatioAtTick(tickUpper),
+                int128(amount)
+            );
+            amount1 = Math.calcAmount1Delta(
+                slot0.sqrtPriceX96,
+                TickMath.getSqrtRatioAtTick(tickLower),
+                int128(amount)
+            );
+            // add实现了减法
+            liquidity = LiquidityMath.addLiquidity(liquidity, int128(amount));
+        } else {
+            amount1 = Math.calcAmount0Delta(
+                TickMath.getSqrtRatioAtTick(tickLower),
+                TickMath.getSqrtRatioAtTick(tickUpper),
+                int128(amount)
+            );
+        }
         uint256 balance0Before;
         uint256 balance1Before;
+        // 在returns中声明了amount0和1
         if (amount0 > 0) balance0Before = balance0();
         if (amount1 > 0) balance1Before = balance1();
         IUniswapV3MintCallback(msg.sender).uniswapV3MintCallback(
@@ -172,6 +222,37 @@ contract UniV3Pool is Test {
         );
     }
 
+function burn(
+        int24 lowerTick,
+        int24 upperTick,
+        uint128 amount
+    ) public returns (uint256 amount0, uint256 amount1) {
+        (
+            Position.Info storage position,
+            int256 amount0Int,
+            int256 amount1Int
+        ) = _modifyPosition(
+                ModifyPositionParams({
+                    owner: msg.sender,
+                    lowerTick: lowerTick,
+                    upperTick: upperTick,
+                    liquidityDelta: -(int128(amount))
+                })
+            );
+
+        amount0 = uint256(-amount0Int);
+        amount1 = uint256(-amount1Int);
+
+        if (amount0 > 0 || amount1 > 0) {
+            (position.tokensOwed0, position.tokensOwed1) = (
+                position.tokensOwed0 + uint128(amount0),
+                position.tokensOwed1 + uint128(amount1)
+            );
+        }
+
+        emit Burn(msg.sender, lowerTick, upperTick, amount, amount0, amount1);
+    }
+
     function balance0() internal view returns (uint256 balance) {
         balance = IERC20(token0).balanceOf(address(this));
     }
@@ -181,19 +262,33 @@ contract UniV3Pool is Test {
     }
 
     // zeroForOne为true时，token0交换token1，即卖出token0
+    // sqrtPriceLimitX96为滑点保护价格
     function swap(
         address recipient,
         bool zeroForOne,
         uint256 amountSpecified,
+        uint160 sqrtPriceLimitX96,
         bytes calldata data
     ) public returns (int256 amount0, int256 amount1) {
         Slot0 memory slot0_ = slot0;
-
+        uint128 liquidity_ = liquidity;
+        if (
+            zeroForOne
+                ? sqrtPriceLimitX96 > slot0_.sqrtPriceX96 ||
+                    sqrtPriceLimitX96 < TickMath.MIN_SQRT_RATIO
+                : sqrtPriceLimitX96 < slot0_.sqrtPriceX96 ||
+                    sqrtPriceLimitX96 > TickMath.MAX_SQRT_RATIO
+        ) revert InvalidPriceLimit();
         SwapState memory state = SwapState({
             amountSpecifiedRemaining: amountSpecified,
             amountCalculated: 0,
             sqrtPriceX96: slot0_.sqrtPriceX96,
-            tick: slot0_.tick
+            tick: slot0_.tick,
+            // sold token0 pay token0 for fee
+            feeGrowthGlobalX128: zeroForOne
+                ? feeGrowthGlobal0X128
+                : feeGrowthGlobal1X128,
+            liquidity: liquidity_
         });
 
         // struct SwapState {
@@ -210,7 +305,10 @@ contract UniV3Pool is Test {
         //     uint256 amountIn;
         //     uint256 amountOut;
         // }
-        while (state.amountSpecifiedRemaining > 0) {
+        while (
+            state.amountSpecifiedRemaining > 0 &&
+            state.sqrtPriceX96 != sqrtPriceLimitX96
+        ) {
             console2.log("--------strat step-----------");
             // 初始化step
             StepState memory step;
@@ -223,30 +321,51 @@ contract UniV3Pool is Test {
                 1,
                 zeroForOne
             );
-            console2.log("next tick: ", step.nextTick);
+
             // 将step.nexttick计算出精确价格，赋予step.sqrtPriceNextX96
             step.sqrtPriceNextX96 = TickMath.getSqrtRatioAtTick(step.nextTick);
-            console2.log("now price", state.sqrtPriceX96);
-            console2.log("next price", step.sqrtPriceNextX96);
-            console2.log("remaining ", state.amountSpecifiedRemaining);
-            console2.log("liquidity ", liquidity);
-            (state.sqrtPriceX96, step.amountIn, step.amountOut) = SwapMath
+
+            // 将当前价格和下一个被激活的tick对应的价格传入，用于计算当前激活区间可提供的amountin
+            (state.sqrtPriceX96, step.amountIn, step.amountOut, step.feeAmount) = SwapMath
                 .computeSwapStep(
                     state.sqrtPriceX96,
-                    step.sqrtPriceNextX96,
-                    liquidity,
-                    state.amountSpecifiedRemaining
+                    // 根据交易方向，和滑点价格计算
+                    (
+                        zeroForOne
+                            ? step.sqrtPriceNextX96 < sqrtPriceLimitX96
+                            : step.sqrtPriceNextX96 > sqrtPriceLimitX96
+                    )
+                        ? sqrtPriceLimitX96
+                        : step.sqrtPriceNextX96,
+                    state.liquidity,
+                    state.amountSpecifiedRemaining,
+                    fee
                 );
-            
 
-            console2.log("now price", state.sqrtPriceX96);
-            console2.log("step.amountIn: ", step.amountIn);
-            console2.log("step.amountOut: ", step.amountOut);
             require(step.amountIn > 0, "invaild num");
+            // 这里累计的是单位流动性的fee，也就是总手续费/总流动性
+            state.feeGrowthGlobalX128 += mulDiv(step.feeAmount, FixedPoint128.Q128, state.liquidity);
             state.amountSpecifiedRemaining -= step.amountIn;
 
             state.amountCalculated += step.amountOut;
-            state.tick = TickMath.getTickAtSqrtRatio(state.sqrtPriceX96);
+            // 若现价为区间tick边界，说明该区间流动性为0，需要跨越区间
+            if (state.sqrtPriceX96 == step.sqrtPriceNextX96) {
+                int128 liquidityDelta = ticks.cross(step.nextTick,(zeroForOne?state.feeGrowthGlobalX128:feeGrowthGlobal0X128),(zeroForOne?feeGrowthGlobal1X128:state.feeGrowthGlobalX128));
+                // 从左到右穿越tick，穿越下界需要增加流动性，穿越上界要降低流动性ƒ
+                // 若从右到左穿越，即zeroForOne为false，则相反
+                if (zeroForOne) liquidityDelta = -liquidityDelta;
+                state.liquidity = LiquidityMath.addLiquidity(
+                    state.liquidity,
+                    liquidityDelta
+                );
+
+                if (state.liquidity == 0) revert NotEnoughLiquidity();
+                // tick区间设置的是左闭右开的，如果价格降低，需要-1到下一个区间，
+                // 如果升高，则已经到了下一个区间
+                state.tick = zeroForOne ? step.nextTick - 1 : step.nextTick;
+            } else {
+                state.tick = TickMath.getTickAtSqrtRatio(state.sqrtPriceX96);
+            }
             console2.log("-------step done------------");
         }
 
@@ -254,6 +373,8 @@ contract UniV3Pool is Test {
             (slot0.sqrtPriceX96, slot0.tick) = (state.sqrtPriceX96, state.tick);
             console2.log("now the lastet tick is : ", slot0.tick);
         }
+
+        if (liquidity_ != state.liquidity) liquidity = state.liquidity;
 
         (amount0, amount1) = zeroForOne
             ? (
@@ -295,8 +416,32 @@ contract UniV3Pool is Test {
             amount0,
             amount1,
             slot0.sqrtPriceX96,
-            liquidity,
+            state.liquidity,
             slot0.tick
         );
+    }
+
+    function flash(
+        uint256 amount0,
+        uint256 amount1,
+        bytes calldata data
+    ) public {
+        uint256 balance0Before = IERC20(token0).balanceOf(address(this));
+        uint256 balance1Before = IERC20(token1).balanceOf(address(this));
+
+        if (amount0 > 0) IERC20(token0).transfer(msg.sender, amount0);
+        if (amount1 > 0) IERC20(token1).transfer(msg.sender, amount1);
+
+        IUniswapV3FlashCallback(msg.sender).uniswapV3FlashCallback(data);
+        require(
+            IERC20(token0).balanceOf(address(this)) >= balance0Before,
+            "FlashLoanNotPaid"
+        );
+        require(
+            IERC20(token1).balanceOf(address(this)) >= balance1Before,
+            "FlashLoanNotPaid"
+        );
+
+        emit Flash(msg.sender, amount0, amount1);
     }
 }

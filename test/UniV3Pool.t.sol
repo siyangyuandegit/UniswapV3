@@ -63,14 +63,22 @@ contract UniV3PoolTest is Test {
 
         console2.log(posLiquidity);
 
-        (bool tickInitialized, uint128 tickLiquidity) = pool.ticks(
+        (bool tickInitialized, uint128 tickTotalLiquidity, int128 tickLiquidityNet) = pool.ticks(
             params.lowerTick
         );
+        console2.log("lowertickinit: ", tickInitialized);
+        console2.log("lowertickTotalLiquidity: ", tickTotalLiquidity);
+        console2.log("lowertickLiquidityNet: ", tickLiquidityNet);
         assertEq(tickInitialized, true, "error init ");
-        assertEq(tickLiquidity, params.liquidity, "error liquidity");
-        (tickInitialized, tickLiquidity) = pool.ticks(params.upperTick);
+        assertEq(tickTotalLiquidity, params.liquidity * 2, "error liquidity");
+        (tickInitialized, tickTotalLiquidity, tickLiquidityNet) = pool.ticks(params.upperTick);
+        console2.log("uppertickinit: ", tickInitialized);
+        console2.log("uppertickTotalLiquidity: ", tickTotalLiquidity);
+        console2.log("uppertickLiquidityNet: ", tickLiquidityNet);
+        console2.log("pool liquidity: ", pool.liquidity());
+        
         assertEq(tickInitialized, true, "error init ");
-        assertEq(tickLiquidity, params.liquidity, "error liquidity");
+        assertEq(tickTotalLiquidity, params.liquidity * 2, "error liquidity");
         // (uint160 sqrtPriceX96, int24 tick) = pool.slot0();
         // 二次mint
     }
@@ -114,7 +122,7 @@ contract UniV3PoolTest is Test {
         console2.log("current tickbitmap: ", current_tick);
         console2.log("lower tickbitmap: ", lower_tick);
         console2.log("upper tickbitmap: ", upper_tick);
-        assertEq(params.liquidity, liquidity, "invalid liquidity");
+        assertEq(params.liquidity, liquidity / 2, "invalid liquidity");
     }
 
     function uniswapV3MintCallback(
