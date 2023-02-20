@@ -16,6 +16,7 @@ library TickBitmap {
 
     function flickTick(
         mapping(int16 => uint256) storage self,
+        // 这里为什么要定义int24的tickSpacing？？？
         int24 tick,
         int24 tickspacing
     ) internal {

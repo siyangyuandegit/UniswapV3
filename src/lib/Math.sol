@@ -64,40 +64,40 @@ library Math {
         uint160 sqrtPriceAX96,
         uint160 sqrtPriceBX96,
         int128 liquidity
-    ) internal pure returns (uint256 amount0) {
+    ) internal pure returns (int256 amount0) {
         amount0 = liquidity < 0
-            ? calcAmount0Delta(
+            ? -int256(calcAmount0Delta(
                 sqrtPriceAX96,
                 sqrtPriceBX96,
                 uint128(-liquidity),
                 false
-            )
-            : calcAmount0Delta(
+            ))
+            : int256(calcAmount0Delta(
                 sqrtPriceAX96,
                 sqrtPriceBX96,
                 uint128(liquidity),
                 true
-            );
+            ));
     }
 
     function calcAmount1Delta(
         uint160 sqrtPriceAX96,
         uint160 sqrtPriceBX96,
         int128 liquidity
-    ) internal pure returns (uint256 amount1) {
+    ) internal pure returns (int256 amount1) {
         amount1 = liquidity < 0
-            ? calcAmount1Delta(
+            ? -int256(calcAmount1Delta(
                 sqrtPriceAX96,
                 sqrtPriceBX96,
                 uint128(-liquidity),
                 false
-            )
-            : calcAmount1Delta(
+            ))
+            : int256(calcAmount1Delta(
                 sqrtPriceAX96,
                 sqrtPriceBX96,
                 uint128(liquidity),
                 true
-            );
+            ));
     }
 
     function getNextSqrtPriceFromInput(

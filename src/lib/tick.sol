@@ -79,6 +79,37 @@ library Tick {
         view
         returns (uint256 feeGrowthInside0X128, uint256 feeGrowthInside1X128)
     {
+        Tick.Info storage lowerTick = self[lowerTick_];
+        Tick.Info storage upperTick = self[upperTick_];
 
+        // 计算tick左侧的手续费
+        uint256 feeGrowthBelow0X128;
+        uint256 feeGrowthBelow1X128;
+        if (currentTick >= lowerTick_) {
+            // ?
+            feeGrowthBelow0X128 = lowerTick.feeGrowthOutside0X128;
+            feeGrowthBelow1X128 = upperTick.feeGrowthOutside1X128;
+        } else {
+            feeGrowthBelow0X128 =
+                feeGrowthGlobal0X128 -
+                lowerTick.feeGrowthOutside0X128;
+            feeGrowthBelow1X128 =
+                feeGrowthGlobal1X128 -
+                lowerTick.feeGrowthOutside1X128;
+        }
+
+        // 计算tick右侧的手续费
+        uint256 feeGrowthAbove0X128;
+        uint256 feeGrowthAbove1X128;
+        if(currentTick < upperTick_){
+            feeGrowthAbove0X128 = upperTick.feeGrowthOutside0X128;
+            feeGrowthAbove1X128 = upperTick.feeGrowthOutside1X128;
+        }else{
+            feeGrowthAbove0X128 = feeGrowthGlobal0X128 - upperTick.feeGrowthOutside0X128;
+            feeGrowthAbove1X128 = feeGrowthGlobal1X128 - upperTick.feeGrowthOutside1X128;
+        }
+
+        feeGrowthInside0X128 = feeGrowthGlobal0X128 - feeGrowthAbove0X128 - feeGrowthBelow0X128;
+        feeGrowthInside1X128 = feeGrowthGlobal1X128 - feeGrowthAbove1X128 - feeGrowthBelow1X128;
     }
 }
