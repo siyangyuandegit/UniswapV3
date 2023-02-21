@@ -36,7 +36,7 @@ contract UniV3Quoter {
             (address tokenIn, address tokenOut, uint24 tickSpacing) = path
                 .decodeFirstPool();
             (uint256 amountOut_, uint160 sqrtPriceX96After, int24 tickAfter) = quoteSingle(
-                Quoteparams({
+                QuoteParams({
                     tokenIn: tokenIn,
                     tokenOut: tokenOut,
                     tickSpacing: tickSpacing,

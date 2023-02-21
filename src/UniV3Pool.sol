@@ -16,8 +16,10 @@ import "./lib/TickMath.sol";
 import "./lib/SwapMath.sol";
 import "forge-std/Test.sol";
 import "./lib/LiquidityMath.sol";
+import "./lib/TransferHelper.sol";
+import "./interfaces/IUniV3Pool.sol";
 
-contract UniV3Pool is Test {
+contract UniV3Pool is Test, IUniV3Pool {
     using Tick for mapping(int24 => Tick.Info);
     using Position for mapping(bytes32 => Position.Info);
     using Position for Position.Info;
@@ -391,5 +393,29 @@ contract UniV3Pool is Test {
         require(IERC20(token1).balanceOf(address(this)) >= balance1Before, "FlashLoanNotPaid");
 
         emit Flash(msg.sender, amount0, amount1);
+    }
+
+    function collect(
+        address recipient,
+        int24 lowerTick,
+        int24 upperTick,
+        uint128 amountRequest0,
+        uint128 amountRequest1
+    ) public returns (uint128 amount0, uint128 amount1) {
+        // 先根据传入的数据获取对应的position
+        Position.Info memory position = positions.get(msg.sender, lowerTick, upperTick);
+        // 判断用户collect的手续费
+        amount0 = amountRequest0 > position.tokensOwed0 ? position.tokensOwed0 : amountRequest0;
+        amount1 = amountRequest1 > position.tokensOwed1 ? position.tokensOwed1 : amountRequest1;
+
+        if (amount0 > 0){
+            position.tokensOwed0 -= amount0;
+            TransferHelper.safeTransfer(token0, recipient, amount0);
+        }
+
+        if (amount1 > 0){
+            position.tokensOwed0 -= amount0;
+            TransferHelper.safeTransfer(token1, recipient, amount1);
+        }
     }
 }

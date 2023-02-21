@@ -65,9 +65,9 @@ contract UniV3Manager is IUniV3Manager {
         uint256 amount1,
         bytes calldata data
     ) public {
-        UniV3Pool.CallbackData memory extra = abi.decode(
+        IUniV3Pool.CallbackData memory extra = abi.decode(
             data,
-            (UniV3Pool.CallbackData)
+            (IUniV3Pool.CallbackData)
         );
         IERC20(extra.token0).transferFrom(extra.payer, msg.sender, amount0);
         IERC20(extra.token1).transferFrom(extra.payer, msg.sender, amount1);
@@ -170,9 +170,9 @@ contract UniV3Manager is IUniV3Manager {
         int256 amount = zeroForOne ? amount0 : amount1;
         // 判断代币接收者是管理合约还是用户，然后将tokenIn转入
         if(data.payer == address(this)){
-            IERC20(tokenIn).transfer(msg.sender, amount);
+            IERC20(tokenIn).transfer(msg.sender, uint256(amount));
         }else{
-            IERC20(tokenIn).transferFrom(data.payer, msg.sender, amount);
+            IERC20(tokenIn).transferFrom(data.payer, msg.sender, uint256(amount));
         }
     }
 
