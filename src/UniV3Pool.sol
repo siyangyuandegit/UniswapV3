@@ -17,15 +17,18 @@ import "./lib/SwapMath.sol";
 import "forge-std/Test.sol";
 import "./lib/LiquidityMath.sol";
 import "./lib/TransferHelper.sol";
+import "./lib/Oracle.sol";
 import "./interfaces/IUniV3Pool.sol";
 
 contract UniV3Pool is Test, IUniV3Pool {
+    using Oracle for Oracle.Observation[65535];
     using Tick for mapping(int24 => Tick.Info);
     using Position for mapping(bytes32 => Position.Info);
     using Position for Position.Info;
     using TickBitmap for mapping(int16 => uint256);
 
     mapping(int16 => uint256) public tickBitmap;
+    Oracle.Observation[65535] public observations;
 
     int24 internal constant MIN_TICK = -887272;
     int24 internal constant MAX_TICK = -MIN_TICK;
@@ -46,6 +49,9 @@ contract UniV3Pool is Test, IUniV3Pool {
     struct Slot0 {
         uint160 sqrtPriceX96;
         int24 tick;
+        uint16 observationIndex;
+        uint16 observationCardinality;
+        uint16 observationCardinalityNext;
     }
 
     Slot0 public slot0;
@@ -116,6 +122,19 @@ contract UniV3Pool is Test, IUniV3Pool {
 
     event Flash(address indexed recipient, uint256 amount0, uint256 amount1);
 
+    event Collect(
+        address indexed owner,
+        address recipient,
+        int24 indexed tickLower,
+        int24 upperTick,
+        uint256 amount0,
+        uint256 amount1
+    );
+
+    event IncreaseObservationCardinalityNext(
+        uint16 observationCardinalityNextOld, uint16 observationCardinalityNextNew
+    );
+
     error InvalidTickRange();
     error InsufficientInputAmount();
     error NotEnoughLiquidity();
@@ -129,7 +148,14 @@ contract UniV3Pool is Test, IUniV3Pool {
     function initialize(uint160 sqrtPriceX96) public {
         require(slot0.sqrtPriceX96 == 0, "already init");
         int24 tick = TickMath.getTickAtSqrtRatio(sqrtPriceX96);
-        slot0 = Slot0({sqrtPriceX96: sqrtPriceX96, tick: tick});
+        (uint16 cardinality, uint16 cardinalityNext) = observations.initialize(_blockTimestamp());
+        slot0 = Slot0({
+            sqrtPriceX96: sqrtPriceX96,
+            tick: tick,
+            observationIndex: 0,
+            observationCardinality: cardinality,
+            observationCardinalityNext: cardinalityNext
+        });
     }
 
     function _modifyPosition(ModifyPositionParams memory params)
@@ -349,12 +375,29 @@ contract UniV3Pool is Test, IUniV3Pool {
             console2.log("-------step done------------");
         }
 
+        // 当交易使得currentTick发生改变（即当前价格）时，还会同步更新Oracle的观测数据
         if (state.tick != slot0_.tick) {
-            (slot0.sqrtPriceX96, slot0.tick) = (state.sqrtPriceX96, state.tick);
-            console2.log("now the lastet tick is : ", slot0.tick);
+            // 这里写入的tick不是最新值，而是交易发生之前的值
+            (uint16 observationIndex, uint16 observationCardinality) = observations.write(
+                slot0_.observationIndex,
+                _blockTimestamp(),
+                slot0_.tick,
+                slot0_.observationCardinality,
+                slot0_.observationCardinalityNext
+            );
+
+            // 更新slot0中的数据
+            (slot0.sqrtPriceX96, slot0.tick, slot0.observationIndex, slot0.observationCardinality) =
+                (state.sqrtPriceX96, state.tick, observationIndex, observationCardinality);
         }
 
         if (liquidity_ != state.liquidity) liquidity = state.liquidity;
+
+        if (zeroForOne) {
+            feeGrowthGlobal0X128 = state.feeGrowthGlobalX128;
+        } else {
+            feeGrowthGlobal1X128 = state.feeGrowthGlobalX128;
+        }
 
         (amount0, amount1) = zeroForOne
             ? (int256(amountSpecified - state.amountSpecifiedRemaining), -int256(state.amountCalculated))
@@ -382,13 +425,19 @@ contract UniV3Pool is Test, IUniV3Pool {
     }
 
     function flash(uint256 amount0, uint256 amount1, bytes calldata data) public {
+        // 计算应得的手续费
+        uint256 fee0 = Math.mulDivRoundingUp(amount0, fee, 1e6);
+        uint256 fee1 = Math.mulDivRoundingUp(amount1, fee, 1e6);
+        // 获取当前池子中的金额
         uint256 balance0Before = IERC20(token0).balanceOf(address(this));
         uint256 balance1Before = IERC20(token1).balanceOf(address(this));
 
+        // 将代币发送给用户
         if (amount0 > 0) IERC20(token0).transfer(msg.sender, amount0);
         if (amount1 > 0) IERC20(token1).transfer(msg.sender, amount1);
 
-        IUniswapV3FlashCallback(msg.sender).uniswapV3FlashCallback(data);
+        // 调用回调函数，收回代币以及利息
+        IUniswapV3FlashCallback(msg.sender).uniswapV3FlashCallback(fee0, fee1, data);
         require(IERC20(token0).balanceOf(address(this)) >= balance0Before, "FlashLoanNotPaid");
         require(IERC20(token1).balanceOf(address(this)) >= balance1Before, "FlashLoanNotPaid");
 
@@ -408,14 +457,35 @@ contract UniV3Pool is Test, IUniV3Pool {
         amount0 = amountRequest0 > position.tokensOwed0 ? position.tokensOwed0 : amountRequest0;
         amount1 = amountRequest1 > position.tokensOwed1 ? position.tokensOwed1 : amountRequest1;
 
-        if (amount0 > 0){
+        if (amount0 > 0) {
             position.tokensOwed0 -= amount0;
             TransferHelper.safeTransfer(token0, recipient, amount0);
         }
 
-        if (amount1 > 0){
+        if (amount1 > 0) {
             position.tokensOwed0 -= amount0;
             TransferHelper.safeTransfer(token1, recipient, amount1);
         }
+
+        emit Collect(msg.sender, recipient, lowerTick, upperTick, amount0, amount1);
+    }
+
+    function increaseObservationCardinalityNext(uint16 observationCardinalityNext) public {
+        uint16 observationCardinalityNextOld = slot0.observationCardinalityNext;
+        uint16 observationCardinalityNextNew =
+            observations.grow(observationCardinalityNextOld, observationCardinalityNext);
+
+        if (observationCardinalityNextNew != observationCardinalityNextOld) {
+            slot0.observationCardinalityNext = observationCardinalityNextNew;
+
+            emit IncreaseObservationCardinalityNext(observationCardinalityNextOld, observationCardinalityNextNew);
+        }
+    }
+
+    //////////////////////
+    /////// INTERNAL////
+    /////////////////////
+    function _blockTimestamp() internal view returns (uint32 timestamp) {
+        timestamp = uint32(block.timestamp);
     }
 }

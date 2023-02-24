@@ -32,8 +32,6 @@ library Tick {
 
         if (liquidityBefore == 0) {
             tickInfo.initialized = true;
-        }
-        if (liquidityBefore == 0) {
             if (tick <= currentTick) {
                 tickInfo.feeGrowthOutside0X128 = feeGrowthGlobal0X128;
                 tickInfo.feeGrowthOutside1X128 = feeGrowthGlobal1X128;

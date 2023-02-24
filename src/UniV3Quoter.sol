@@ -101,7 +101,7 @@ contract UniV3Quoter {
             ? uint256(-amount1Delta)
             : uint256(-amount0Delta);
 
-        (uint160 sqrtPriceX96After, int24 tickAfter) = IUniV3Pool(pool).slot0();
+        (uint160 sqrtPriceX96After, int24 tickAfter, , , ) = IUniV3Pool(pool).slot0();
         // 这里实际上就是abi.encode做的（每个数据都是32字节，总共三个，所以96字节的偏移量）
         assembly {
             // 读取下一个可用memory slot的指针，EVM中memory组织成32字节的slot形式

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.14;
-
+import "../../lib/openzeppelin-contracts/contracts/utils/Address.sol";
 interface IUniV3Pool {
     struct CallbackData {
         address token0;
@@ -8,7 +8,16 @@ interface IUniV3Pool {
         address payer;
     }
 
-    function slot0() external view returns (uint160 sqrtPriceX96, int24 tick);
+    function slot0()
+        external
+        view
+        returns (
+            uint160 sqrtPriceX96,
+            int24 tick,
+            uint16 observationIndex,
+            uint16 observationCardinality,
+            uint16 observationCardinalityNext
+        );
     function token0() external view returns (address);
     function token1() external view returns (address);
 

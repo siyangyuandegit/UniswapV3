@@ -24,7 +24,7 @@ contract UniV3Manager is IUniV3Manager {
         returns (uint256 amount0, uint256 amount1)
     {
         IUniV3Pool pool = IUniV3Pool(params.poolAddress);
-        (uint160 sqrtPriceX96, ) = pool.slot0();
+        (uint160 sqrtPriceX96,,,,) = pool.slot0();
         uint160 sqrtPriceLowerX96 = TickMath.getSqrtRatioAtTick(
             params.lowerTick
         );
